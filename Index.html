@@ -1,0 +1,677 @@
+<!DOCTYPE html>
+
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>늑구빵 대작전 🐺🍞</title>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;700;900&display=swap" rel="stylesheet">
+<style>
+* { margin:0; padding:0; box-sizing:border-box; touch-action:none; }
+body {
+  background: radial-gradient(ellipse at center, #3d1f0a 0%, #1a0a03 100%);
+  display:flex; justify-content:center; align-items:center;
+  min-height:100vh; overflow:hidden;
+  font-family:'Noto Sans KR',sans-serif;
+}
+#wrap {
+  position:relative;
+  width:min(400px,100vw);
+  height:min(700px,100vh);
+}
+canvas {
+  display:block; lwidth:100%; height:100%;
+  border-radius:20px;
+  box-shadow:0 0 60px rgba(212,160,87,0.3), 0 25px 80px rgba(0,0,0,0.7);
+}
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="c"></canvas></div>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const W = 400, H = 700;
+canvas.width = W; canvas.height = H;
+
+// ── 상수 ──────────────────────────────────────────────────────
+const GROUND_Y = H - 110;
+const PW = 52, PH = 58;
+
+// 스테이지 설정
+const STAGES = [
+{ goal:5,  speed:3.2, label:‘1단계’, desc:‘빵 5개 모으기!’ },
+{ goal:10, speed:4.8, label:‘2단계’, desc:‘빵 10개 모으기!’ },
+{ goal:15, speed:6.5, label:‘3단계’, desc:‘빵 15개 모으기!’ },
+];
+
+// ── 상태 ──────────────────────────────────────────────────────
+let ST, stage, score, lives, t, transT;
+let player, obstacles, breads, particles, coins;
+let groundOff, cloudOff;
+
+const S = { TITLE:0, PLAY:1, CLEAR:2, OVER:3, WIN:4 };
+
+function rr(x,y,w,h,r){
+ctx.beginPath();
+ctx.moveTo(x+r,y);
+ctx.lineTo(x+w-r,y); ctx.arcTo(x+w,y,x+w,y+r,r);
+ctx.lineTo(x+w,y+h-r); ctx.arcTo(x+w,y+h,x+w-r,y+h,r);
+ctx.lineTo(x+r,y+h); ctx.arcTo(x,y+h,x,y+h-r,r);
+ctx.lineTo(x,y+r); ctx.arcTo(x,y,x+r,y,r);
+ctx.closePath();
+}
+
+function init(){
+ST=S.TITLE; stage=0; score=0; lives=3; t=0; transT=0;
+resetLevel();
+}
+
+function resetLevel(){
+t=0; transT=0; groundOff=0; cloudOff=0;
+obstacles=[]; breads=[]; particles=[]; coins=[];
+player={ x:80, y:GROUND_Y-PH, vy:0, onGround:true, leg:0, legT:0, hit:0 };
+}
+
+// ── 입력 ──────────────────────────────────────────────────────
+function onTap(){
+if(ST===S.TITLE){ ST=S.PLAY; resetLevel(); return; }
+if(ST===S.PLAY){ doJump(); return; }
+if(transT<=0){
+if(ST===S.CLEAR){ stage++; score=0; ST=S.PLAY; resetLevel(); }
+else if(ST===S.OVER){ stage=0; score=0; lives=3; ST=S.PLAY; resetLevel(); }
+else if(ST===S.WIN){ init(); }
+}
+}
+canvas.addEventListener(‘click’, onTap);
+canvas.addEventListener(‘touchstart’, e=>{ e.preventDefault(); onTap(); }, {passive:false});
+document.addEventListener(‘keydown’, e=>{ if(e.code===‘Space’){ e.preventDefault(); onTap(); }});
+
+function doJump(){
+if(player.onGround){
+player.vy = -16.5;
+player.onGround = false;
+spawnJumpParticles();
+}
+}
+
+// ── 파티클 ────────────────────────────────────────────────────
+function addP(x,y,col,n,pow=1){
+for(let i=0;i<n;i++) particles.push({
+x,y, vx:(Math.random()-0.5)*7*pow,
+vy:(-Math.random()*6-2)*pow,
+r:3+Math.random()*5, col, life:1
+});
+}
+function spawnJumpParticles(){
+for(let i=0;i<6;i++) particles.push({
+x:player.x+PW/2, y:GROUND_Y,
+vx:(Math.random()-0.5)*4, vy:Math.random()*3+1,
+r:4+Math.random()*3, col:‘rgba(160,114,74,0.6)’, life:0.8
+});
+}
+
+// ── 업데이트 ──────────────────────────────────────────────────
+function update(){
+if(ST!==S.PLAY){ if(transT>0) transT–; updateParticles(); return; }
+t++;
+const spd = STAGES[stage].speed;
+
+// 플레이어 물리
+player.vy += 0.75;
+player.y += player.vy;
+if(player.y >= GROUND_Y-PH){
+player.y = GROUND_Y-PH;
+player.vy = 0;
+player.onGround = true;
+}
+if(player.hit>0) player.hit–;
+
+// 걷기 애니
+player.legT++;
+if(player.onGround && player.legT>7){ player.leg=(player.leg+1)%4; player.legT=0; }
+
+// 스크롤
+groundOff = (groundOff - spd*0.5)%50;
+cloudOff  = (cloudOff  - 0.4)%(W+200);
+
+// 스폰: 장애물
+const obInterval = Math.max(70, 130-stage*20);
+if(t % obInterval === 0){
+const h = 40 + Math.random()*35;
+obstacles.push({ x:W+40, y:GROUND_Y-h, w:32+Math.random()*18, h });
+}
+
+// 스폰: 빵
+const brInterval = Math.max(55, 90-stage*12);
+if(t % brInterval === 20){
+breads.push({
+x:W+30, y:GROUND_Y-90-Math.random()*90,
+r:20, bob:Math.random()*Math.PI*2, collected:false
+});
+}
+
+// 스폰: 코인
+if(t%40===10){
+coins.push({ x:W+20, y:GROUND_Y-70-Math.random()*60, r:9, life:1 });
+}
+
+// 이동
+obstacles.forEach(o=>o.x-=spd);
+breads.forEach(b=>b.x-=spd);
+coins.forEach(c=>c.x-=spd*0.8);
+
+// 필터
+obstacles = obstacles.filter(o=>o.x>-60);
+breads    = breads.filter(b=>b.x>-50);
+coins     = coins.filter(c=>c.x>-20);
+
+// 충돌: 장애물
+if(player.hit===0){
+for(let o of obstacles){
+if(player.x+PW-8>o.x+5 && player.x+8<o.x+o.w-5 &&
+player.y+PH>o.y+4   && player.y<o.y+o.h){
+lives–;
+player.hit = 90;
+player.vy = -12;
+addP(player.x+PW/2, player.y+PH/2, ‘#e74c3c’, 16);
+obstacles=[];
+if(lives<=0){ ST=S.OVER; transT=80; addP(player.x+PW/2,player.y,’#e74c3c’,30,1.5); }
+break;
+}
+}
+}
+
+// 충돌: 빵
+for(let b of breads){
+if(!b.collected){
+const dx = (player.x+PW/2)-b.x, dy = (player.y+PH/2)-b.y;
+if(Math.sqrt(dx*dx+dy*dy)<PW/2+b.r-4){
+b.collected=true; score++;
+addP(b.x,b.y,’#f39c12’,12);
+addP(b.x,b.y,’#ffffff’,6);
+if(score>=STAGES[stage].goal){
+if(stage>=STAGES.length-1){ ST=S.WIN; transT=120; spawnWinConfetti(); }
+else { ST=S.CLEAR; transT=90; }
+}
+}
+}
+}
+breads = breads.filter(b=>!b.collected);
+
+updateParticles();
+}
+
+function spawnWinConfetti(){
+const cols=[’#f39c12’,’#e74c3c’,’#27ae60’,’#3498db’,’#ffffff’,’#f0d9aa’];
+for(let i=0;i<80;i++){
+particles.push({
+x:Math.random()*W, y:-10,
+vx:(Math.random()-0.5)*4, vy:Math.random()*5+2,
+r:4+Math.random()*5, col:cols[Math.floor(Math.random()*cols.length)],
+life:1+Math.random()*0.5
+});
+}
+}
+
+function updateParticles(){
+particles.forEach(p=>{
+p.x+=p.vx; p.y+=p.vy;
+p.vy+=0.18; p.vx*=0.98;
+p.life-=0.022;
+});
+particles = particles.filter(p=>p.life>0);
+}
+
+// ── 그리기: 배경 ────────────────────────────────────────────────
+function drawBg(){
+// 하늘
+const g=ctx.createLinearGradient(0,0,0,GROUND_Y);
+g.addColorStop(0,’#f7e4b0’);
+g.addColorStop(1,’#fdf2d4’);
+ctx.fillStyle=g; ctx.fillRect(0,0,W,GROUND_Y);
+
+// 배경 건물 실루엣
+ctx.fillStyle=‘rgba(200,170,110,0.25)’;
+[[20,200,60,120],[90,220,40,100],[160,210,70,110],[240,230,50,90],[300,205,65,115],[340,220,55,100]].forEach(([x,y,w,h])=>{
+ctx.fillRect(x,GROUND_Y-h,w,h);
+// 창문들
+ctx.fillStyle=‘rgba(180,150,90,0.3)’;
+for(let r=0;r<3;r++) for(let c=0;c<2;c++) ctx.fillRect(x+5+c*14,GROUND_Y-h+8+r*20,8,10);
+ctx.fillStyle=‘rgba(200,170,110,0.25)’;
+});
+
+// 구름
+ctx.fillStyle=‘rgba(255,255,255,0.75)’;
+[[60,55,1],[190,38,0.85],[300,65,0.65],[420,45,0.9]].forEach(([cx,cy,s])=>{
+const ox=((cx+cloudOff*s)%(W+220))-60;
+drawCloud(ox,cy,s);
+});
+}
+
+function drawCloud(x,y,s){
+ctx.save(); ctx.translate(x,y); ctx.scale(s,s);
+ctx.beginPath();
+ctx.arc(0,0,22,0,Math.PI*2);
+ctx.arc(28,-6,28,0,Math.PI*2);
+ctx.arc(60,2,20,0,Math.PI*2);
+ctx.fill(); ctx.restore();
+}
+
+function drawGround(){
+// 땅 기둥
+const g=ctx.createLinearGradient(0,GROUND_Y,0,H);
+g.addColorStop(0,’#8B5E3C’); g.addColorStop(1,’#4a2c0e’);
+ctx.fillStyle=g; ctx.fillRect(0,GROUND_Y,W,H-GROUND_Y);
+
+// 잔디 선
+ctx.fillStyle=’#A0724A’; ctx.fillRect(0,GROUND_Y,W,6);
+ctx.fillStyle=‘rgba(255,255,255,0.12)’;
+ctx.fillRect(0,GROUND_Y+8,W,2);
+
+// 패턴
+ctx.fillStyle=‘rgba(0,0,0,0.08)’;
+for(let i=-1;i<10;i++){
+const x=i*50+((groundOff*2)%50);
+ctx.fillRect(x,GROUND_Y+2,35,4);
+}
+}
+
+// ── 늑구 그리기 ─────────────────────────────────────────────────
+function drawWolf(px,py,legF,jumping,isHit){
+ctx.save();
+ctx.translate(px+PW/2, py+PH/2);
+if(isHit && Math.floor(isHit/5)%2===0){ ctx.globalAlpha=0.4; }
+
+const LA = jumping ? 0 : Math.sin(legF*Math.PI/2)*7;
+
+// 다리
+ctx.fillStyle=’#757575’;
+rr(ctx, -18, 16-LA, 12, 18, 4); ctx.fill();
+rr(ctx,  6, 16+LA, 12, 18, 4); ctx.fill();
+// 발
+ctx.fillStyle=’#5a5a5a’;
+rr(ctx, -20, 31-LA, 14, 6, 3); ctx.fill();
+rr(ctx,  4, 31+LA, 14, 6, 3); ctx.fill();
+
+// 몸통
+const bg=ctx.createRadialGradient(-5,-5,0,0,0,28);
+bg.addColorStop(0,’#b0b0b0’); bg.addColorStop(1,’#878787’);
+ctx.fillStyle=bg;
+rr(ctx,-22,-16,44,38,13); ctx.fill();
+
+// 배
+ctx.fillStyle=’#e0e0e0’;
+rr(ctx,-13,2,26,20,9); ctx.fill();
+
+// 빨간 스카프
+ctx.fillStyle=’#c0392b’;
+rr(ctx,-20,-7,40,10,4); ctx.fill();
+// 스카프 매듭
+ctx.fillStyle=’#a93226’;
+rr(ctx,6,-7,11,20,5); ctx.fill();
+ctx.fillStyle=’#c0392b’;
+ctx.beginPath(); ctx.arc(12,12,5,0,Math.PI*2); ctx.fill();
+
+// 머리
+const hg=ctx.createRadialGradient(-3,-28,0,0,-22,20);
+hg.addColorStop(0,’#b5b5b5’); hg.addColorStop(1,’#8a8a8a’);
+ctx.fillStyle=hg;
+ctx.beginPath(); ctx.arc(0,-22,19,0,Math.PI*2); ctx.fill();
+
+// 귀
+ctx.fillStyle=’#757575’;
+ctx.beginPath(); ctx.moveTo(-14,-36); ctx.lineTo(-22,-52); ctx.lineTo(-4,-38); ctx.fill();
+ctx.beginPath(); ctx.moveTo(14,-36);  ctx.lineTo(22,-52);  ctx.lineTo(4,-38);  ctx.fill();
+ctx.fillStyle=’#f8bbd9’;
+ctx.beginPath(); ctx.moveTo(-13,-37); ctx.lineTo(-19,-48); ctx.lineTo(-6,-38);  ctx.fill();
+ctx.beginPath(); ctx.moveTo(13,-37);  ctx.lineTo(19,-48);  ctx.lineTo(6,-38);   ctx.fill();
+
+// 눈
+ctx.fillStyle=’#1a1a1a’;
+ctx.beginPath(); ctx.arc(-7,-25,4.5,0,Math.PI*2); ctx.fill();
+ctx.beginPath(); ctx.arc(7,-25,4.5,0,Math.PI*2); ctx.fill();
+ctx.fillStyle=’#fff’;
+ctx.beginPath(); ctx.arc(-5,-27,1.8,0,Math.PI*2); ctx.fill();
+ctx.beginPath(); ctx.arc(9,-27,1.8,0,Math.PI*2); ctx.fill();
+
+// 눈썹 (귀여운)
+ctx.strokeStyle=’#555’; ctx.lineWidth=2; ctx.lineCap=‘round’;
+ctx.beginPath(); ctx.moveTo(-10,-31); ctx.quadraticCurveTo(-7,-33,-4,-31); ctx.stroke();
+ctx.beginPath(); ctx.moveTo(10,-31); ctx.quadraticCurveTo(7,-33),ctx.lineTo(4,-31); ctx.stroke();
+
+// 주둥이
+ctx.fillStyle=’#c0c0c0’;
+ctx.beginPath(); ctx.ellipse(0,-15,10,7,0,0,Math.PI*2); ctx.fill();
+// 코
+ctx.fillStyle=’#1a1a1a’;
+ctx.beginPath(); ctx.ellipse(0,-20,5.5,3.5,0,0,Math.PI*2); ctx.fill();
+ctx.fillStyle=‘rgba(255,255,255,0.4)’;
+ctx.beginPath(); ctx.ellipse(-2,-21,2,1.5,0,0,Math.PI*2); ctx.fill();
+
+// 배낭
+ctx.fillStyle=’#8B6914’;
+rr(ctx, 15,-14,16,22,5); ctx.fill();
+ctx.fillStyle=’#a07820’;
+rr(ctx, 17,-12,12,10,3); ctx.fill();
+ctx.fillStyle=‘rgba(255,255,255,0.3)’;
+ctx.fillRect(21,-8,4,2);
+
+ctx.restore();
+}
+
+// ── 빵 그리기 ──────────────────────────────────────────────────
+function drawBread(bx,by,br,bt){
+const bob = Math.sin(bt*0.06+br)*6;
+ctx.save(); ctx.translate(bx, by+bob);
+
+// 그림자
+ctx.fillStyle=‘rgba(0,0,0,0.12)’;
+ctx.beginPath(); ctx.ellipse(0,br+6,br*0.85,5,0,0,Math.PI*2); ctx.fill();
+
+// 빵 몸통
+const g=ctx.createRadialGradient(-br*0.3,-br*0.3,0,0,0,br);
+g.addColorStop(0,’#ecc870’); g.addColorStop(0.65,’#D4A057’); g.addColorStop(1,’#B07840’);
+ctx.fillStyle=g;
+ctx.beginPath(); ctx.arc(0,0,br,0,Math.PI*2); ctx.fill();
+
+// 늑구 얼굴
+ctx.fillStyle=’#9e9e9e’;
+ctx.beginPath(); ctx.arc(0,-br*0.08,br*0.52,0,Math.PI*2); ctx.fill();
+// 미니 귀
+ctx.fillStyle=’#757575’;
+ctx.beginPath(); ctx.moveTo(-9,-11); ctx.lineTo(-13,-18); ctx.lineTo(-4,-12); ctx.fill();
+ctx.beginPath(); ctx.moveTo(9,-11); ctx.lineTo(13,-18); ctx.lineTo(4,-12); ctx.fill();
+// 미니 눈
+ctx.fillStyle=’#1a1a1a’;
+ctx.beginPath(); ctx.arc(-5,-4,2.2,0,Math.PI*2); ctx.fill();
+ctx.beginPath(); ctx.arc(5,-4,2.2,0,Math.PI*2); ctx.fill();
+ctx.fillStyle=’#fff’;
+ctx.beginPath(); ctx.arc(-4,-5,0.9,0,Math.PI*2); ctx.fill();
+ctx.beginPath(); ctx.arc(6,-5,0.9,0,Math.PI*2); ctx.fill();
+// 코
+ctx.fillStyle=’#1a1a1a’;
+ctx.beginPath(); ctx.ellipse(0,0,2.8,1.8,0,0,Math.PI*2); ctx.fill();
+// 스카프
+ctx.fillStyle=’#c0392b’;
+ctx.fillRect(-8,3,16,4);
+
+// 빵 광택
+ctx.fillStyle=‘rgba(255,255,255,0.32)’;
+ctx.beginPath(); ctx.arc(-br*0.28,-br*0.28,br*0.22,0,Math.PI*2); ctx.fill();
+
+ctx.restore();
+}
+
+// ── 장애물 (성심당 박스) ───────────────────────────────────────
+function drawObstacle(o){
+ctx.save(); ctx.translate(o.x, o.y);
+// 박스
+const g=ctx.createLinearGradient(0,0,o.w,o.h);
+g.addColorStop(0,’#fdf5e4’); g.addColorStop(1,’#f0e0c0’);
+ctx.fillStyle=g; rr(ctx,0,0,o.w,o.h,6); ctx.fill();
+ctx.strokeStyle=’#c9a96e’; ctx.lineWidth=2; ctx.stroke();
+// 손잡이
+ctx.strokeStyle=’#b8874a’; ctx.lineWidth=3;
+ctx.beginPath(); ctx.moveTo(o.w*0.3,0); ctx.quadraticCurveTo(o.w/2,-10,o.w*0.7,0); ctx.stroke();
+// 텍스트
+ctx.fillStyle=’#5C3317’; ctx.font=`bold ${Math.min(10,o.w*0.28)}px 'Noto Sans KR'`;
+ctx.textAlign=‘center’;
+ctx.fillText(‘성심당’, o.w/2, o.h*0.42);
+ctx.font=`${Math.min(8,o.w*0.22)}px sans-serif`;
+ctx.fillText(‘🍞’, o.w/2, o.h*0.7);
+ctx.restore();
+}
+
+// ── HUD ────────────────────────────────────────────────────────
+function drawHUD(){
+// 상단 바
+ctx.fillStyle=‘rgba(60,28,8,0.88)’;
+rr(ctx, 10, 10, W-20, 62, 16); ctx.fill();
+ctx.strokeStyle=‘rgba(212,160,87,0.4)’; ctx.lineWidth=1.5; ctx.stroke();
+
+// 목숨
+for(let i=0;i<3;i++){
+ctx.font=‘22px serif’;
+ctx.globalAlpha = i<lives ? 1 : 0.2;
+ctx.textAlign=‘left’;
+ctx.fillText(‘🐾’, 22+i*28, 50);
+}
+ctx.globalAlpha=1;
+
+// 스테이지
+ctx.fillStyle=’#f39c12’; ctx.font=‘bold 14px Noto Sans KR’;
+ctx.textAlign=‘center’;
+ctx.fillText(STAGES[stage].label, W/2, 32);
+
+// 프로그레스 바
+const bw=140, prog=Math.min(score/STAGES[stage].goal,1);
+ctx.fillStyle=‘rgba(255,255,255,0.15)’;
+rr(ctx, W/2-bw/2, 38, bw, 16, 8); ctx.fill();
+if(prog>0){
+const pg=ctx.createLinearGradient(W/2-bw/2,0,W/2+bw/2,0);
+pg.addColorStop(0,’#f39c12’); pg.addColorStop(1,’#e67e22’);
+ctx.fillStyle=pg;
+rr(ctx, W/2-bw/2, 38, bw*prog, 16, 8); ctx.fill();
+}
+ctx.fillStyle=’#fff’; ctx.font=‘bold 10px Noto Sans KR’;
+ctx.fillText(`🍞 ${score} / ${STAGES[stage].goal}`, W/2, 50);
+
+// 점프 힌트 (초반에만)
+if(t>0 && t<150 && stage===0){
+ctx.fillStyle=`rgba(255,248,231,${Math.sin(t*0.08)*0.4+0.5})`;
+ctx.font=‘14px Noto Sans KR’;
+ctx.fillText(‘탭하면 점프! 🐾’, W/2, H-30);
+}
+}
+
+// ── 파티클 그리기 ──────────────────────────────────────────────
+function drawParticles(){
+particles.forEach(p=>{
+ctx.save();
+ctx.globalAlpha=Math.max(0,Math.min(1,p.life));
+ctx.fillStyle=p.col;
+ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,Math.PI*2); ctx.fill();
+ctx.restore();
+});
+}
+
+// ── 오버레이 화면 ──────────────────────────────────────────────
+function drawTitle(){
+// 배경
+const bg=ctx.createLinearGradient(0,0,0,H);
+bg.addColorStop(0,’#f5e6c0’); bg.addColorStop(1,’#e8d4a0’);
+ctx.fillStyle=bg; ctx.fillRect(0,0,W,H);
+
+// 체커 패턴
+ctx.fillStyle=‘rgba(92,51,23,0.04)’;
+for(let i=0;i<10;i++) for(let j=0;j<18;j++)
+if((i+j)%2===0) ctx.fillRect(i*42,j*42,42,42);
+
+// 타이틀 배너
+ctx.fillStyle=’#5C3317’;
+rr(ctx,24,50,W-48,130,20); ctx.fill();
+ctx.strokeStyle=’#D4A057’; ctx.lineWidth=3; ctx.stroke();
+// 내부 장식선
+ctx.strokeStyle=‘rgba(212,160,87,0.3)’; ctx.lineWidth=1;
+rr(ctx,30,56,W-60,118,17); ctx.stroke();
+
+ctx.fillStyle=‘rgba(212,160,87,0.8)’;
+ctx.font=‘bold 13px Noto Sans KR’; ctx.textAlign=‘center’;
+ctx.fillText(‘성심당 × 늑구’, W/2, 82);
+
+ctx.fillStyle=’#f5e6c0’;
+ctx.font=‘bold 38px Noto Sans KR’;
+ctx.fillText(‘늑구빵 대작전!’, W/2, 128);
+
+ctx.fillStyle=‘rgba(255,248,231,0.7)’;
+ctx.font=‘13px Noto Sans KR’;
+ctx.fillText(‘귀여운 늑구와 함께 빵을 모아보자! 🍞’, W/2, 160);
+
+// 늑구 캐릭터
+drawWolf(W/2-PW/2, H/2-120, 0, false, 0);
+
+// 장식 빵들
+[-120,-40,40,120].forEach((ox,i)=>{
+drawBread(W/2+ox, H/2+40, 18, t+i*25);
+});
+
+// 게임 방법 카드
+ctx.fillStyle=‘rgba(60,28,8,0.88)’;
+rr(ctx,30,H/2+85,W-60,110,18); ctx.fill();
+ctx.strokeStyle=‘rgba(212,160,87,0.35)’; ctx.lineWidth=1.5; ctx.stroke();
+
+ctx.fillStyle=’#f39c12’; ctx.font=‘bold 15px Noto Sans KR’;
+ctx.fillText(‘🎮 게임 방법’, W/2, H/2+110);
+
+const tips=[‘화면 탭 → 늑구 점프! 🐺’,‘🍞 빵을 모아 성심당으로 가자!’,‘📦 성심당 박스는 피하세요!’];
+ctx.fillStyle=‘rgba(255,248,231,0.85)’; ctx.font=‘13px Noto Sans KR’;
+tips.forEach((tip,i)=> ctx.fillText(tip, W/2, H/2+135+i*22));
+
+// 시작 버튼
+const pulse=1+Math.sin(t*0.07)*0.04;
+ctx.save(); ctx.translate(W/2,H-72); ctx.scale(pulse,pulse);
+const bg2=ctx.createLinearGradient(-95,-28,95,28);
+bg2.addColorStop(0,’#c0392b’); bg2.addColorStop(1,’#e74c3c’);
+ctx.fillStyle=bg2; rr(ctx,-95,-28,190,56,28); ctx.fill();
+ctx.strokeStyle=‘rgba(255,255,255,0.3)’; ctx.lineWidth=2; ctx.stroke();
+ctx.fillStyle=’#fff’; ctx.font=‘bold 18px Noto Sans KR’;
+ctx.fillText(‘탭해서 시작! 🐾’, 0, 8);
+ctx.restore();
+}
+
+function drawStageClear(){
+ctx.fillStyle=‘rgba(40,20,5,0.82)’; ctx.fillRect(0,0,W,H);
+drawParticles();
+
+ctx.save(); ctx.translate(W/2, H/2);
+const sc=1+Math.sin(t*0.12)*0.05;
+ctx.scale(sc,sc);
+
+ctx.fillStyle=’#f39c12’;
+ctx.font=‘bold 42px Noto Sans KR’; ctx.textAlign=‘center’;
+ctx.fillText(‘🎉 단계 클리어!’, 0, -60);
+
+ctx.fillStyle=’#fff’; ctx.font=‘bold 24px Noto Sans KR’;
+ctx.fillText(STAGES[stage].label+’ 완료!’, 0, -10);
+
+const ns=stage+1;
+if(ns<STAGES.length){
+ctx.fillStyle=‘rgba(255,248,231,0.7)’; ctx.font=‘14px Noto Sans KR’;
+ctx.fillText(’다음: ‘+STAGES[ns].label+’ → ’+STAGES[ns].desc, 0, 30);
+ctx.font=‘13px Noto Sans KR’;
+ctx.fillText(‘빵이 더 빨라져요! 💨’, 0, 58);
+}
+
+ctx.fillStyle=‘rgba(255,255,255,0.5)’; ctx.font=‘14px Noto Sans KR’;
+ctx.fillText(‘탭해서 다음 단계 →’, 0, 105);
+ctx.restore();
+}
+
+function drawGameOver(){
+ctx.fillStyle=‘rgba(15,5,0,0.92)’; ctx.fillRect(0,0,W,H);
+drawParticles();
+
+ctx.fillStyle=’#e74c3c’; ctx.font=‘bold 44px Noto Sans KR’; ctx.textAlign=‘center’;
+ctx.fillText(‘💔 게임 오버’, W/2, H/2-55);
+
+ctx.fillStyle=‘rgba(255,248,231,0.8)’; ctx.font=‘18px Noto Sans KR’;
+ctx.fillText(‘늑구가 넘어졌어요…’, W/2, H/2);
+
+ctx.fillStyle=‘rgba(255,248,231,0.5)’; ctx.font=‘14px Noto Sans KR’;
+ctx.fillText(‘다시 일어나서 빵 사러 가자! 💪’, W/2, H/2+38);
+
+ctx.fillStyle=‘rgba(255,255,255,0.45)’; ctx.font=‘14px Noto Sans KR’;
+ctx.fillText(‘탭해서 다시 시작 →’, W/2, H/2+90);
+}
+
+function drawWin(){
+const bg=ctx.createLinearGradient(0,0,0,H);
+bg.addColorStop(0,’#f5e6c0’); bg.addColorStop(1,’#e8d4a0’);
+ctx.fillStyle=bg; ctx.fillRect(0,0,W,H);
+drawParticles();
+
+// 상단 카드
+ctx.fillStyle=’#5C3317’;
+rr(ctx,24,32,W-48,145,20); ctx.fill();
+ctx.strokeStyle=’#D4A057’; ctx.lineWidth=3; ctx.stroke();
+
+ctx.fillStyle=’#f39c12’; ctx.font=‘bold 34px Noto Sans KR’; ctx.textAlign=‘center’;
+ctx.fillText(‘🎊 늑구빵 GET! 🎊’, W/2, 82);
+
+ctx.fillStyle=’#fff’; ctx.font=‘bold 18px Noto Sans KR’;
+ctx.fillText(‘성심당 도착 성공!’, W/2, 118);
+
+ctx.fillStyle=‘rgba(255,248,231,0.6)’; ctx.font=‘14px Noto Sans KR’;
+ctx.fillText(‘귀여운 늑구빵 구매 완료! ₩2,800’, W/2, 148);
+ctx.fillText(‘초코크림이 들어있는 부드러운 빵이에요!’, W/2, 168);
+
+// 늑구
+drawWolf(W/2-PW/2, H/2-88, t%4, false, 0);
+
+// 빵들
+[-140,-70,0,70,140].forEach((ox,i)=>{
+drawBread(W/2+ox, H/2+55, 22, t+i*18);
+});
+
+// 하단 카드
+ctx.fillStyle=‘rgba(60,28,8,0.88)’;
+rr(ctx,30,H-175,W-60,105,18); ctx.fill();
+ctx.strokeStyle=‘rgba(212,160,87,0.3)’; ctx.lineWidth=1; ctx.stroke();
+
+ctx.fillStyle=‘rgba(212,160,87,0.9)’; ctx.font=‘bold 14px Noto Sans KR’;
+ctx.fillText(‘대전 성심당에서 만나는 귀여운 늑구!’, W/2, H-148);
+ctx.fillStyle=‘rgba(255,248,231,0.7)’; ctx.font=‘13px Noto Sans KR’;
+ctx.fillText(‘선물로도 좋아요! ♡’, W/2, H-124);
+
+// 재시작 버튼
+const pulse=1+Math.sin(t*0.07)*0.04;
+ctx.save(); ctx.translate(W/2,H-60); ctx.scale(pulse,pulse);
+ctx.fillStyle=’#c0392b’; rr(ctx,-80,-22,160,44,22); ctx.fill();
+ctx.fillStyle=’#fff’; ctx.font=‘bold 16px Noto Sans KR’;
+ctx.fillText(‘처음으로 돌아가기 →’, 0, 7);
+ctx.restore();
+}
+
+// ── 메인 렌더 ──────────────────────────────────────────────────
+function draw(){
+ctx.clearRect(0,0,W,H);
+
+if(ST===S.TITLE){ drawTitle(); return; }
+if(ST===S.WIN){ drawWin(); return; }
+
+// 게임 장면
+drawBg();
+obstacles.forEach(o=>drawObstacle(o));
+breads.forEach(b=>drawBread(b.x,b.y,b.r,t));
+coins.forEach(c=>{
+ctx.save(); ctx.globalAlpha=c.life*0.6;
+ctx.fillStyle=’#f39c12’;
+ctx.beginPath(); ctx.arc(c.x,c.y,c.r,0,Math.PI*2); ctx.fill();
+ctx.fillStyle=’#fff’; ctx.font=‘bold 9px sans-serif’; ctx.textAlign=‘center’;
+ctx.fillText(‘🍞’,c.x,c.y+3);
+ctx.restore();
+});
+drawGround();
+drawWolf(player.x, player.y, player.leg, !player.onGround, player.hit);
+drawParticles();
+drawHUD();
+
+if(ST===S.CLEAR) drawStageClear();
+if(ST===S.OVER)  drawGameOver();
+}
+
+// ── 루프 ───────────────────────────────────────────────────────
+function loop(){
+update();
+draw();
+t++;
+requestAnimationFrame(loop);
+}
+
+init();
+loop();
+</script>
+
+</body>
+</html>
